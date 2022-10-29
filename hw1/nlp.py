@@ -130,23 +130,42 @@ def get_verb(doc):
         if token.pos_ == 'VERB':
             verbs.append(token.text)
 
+            min_forward_index = len(doc)
+            max_afterward_index = -1
             for child in token.children:
                 if child.pos_ == 'ADP' and 'prep' in child.dep_:
+                    if child.i > max_afterward_index:
+                        max_afterward_index = child.i
                     verbs.append(token.text + ' ' + child.text)
+                    is_all_adv = True
                     for j in range(token.i+1, child.i):
                         if doc[j].pos_ != 'ADV' or 'advmod' not in doc[j].dep_:
                             is_all_adv = False
                             break
                     if is_all_adv:
+                        if child.i > max_afterward_index:
+                            max_afterward_index = child.i
                         verbs.append(doc[token.i:child.i+1].text)
 
                 if child.pos_ == 'ADP' and 'prt' in child.dep_:
                     verbs.append(token.text + ' ' + child.text)
                 if child.pos_ == 'AUX' and 'aux' in child.dep_:
+                    if child.i < min_forward_index:
+                        min_forward_index = child.i
                     verbs.append(child.text + ' ' + token.text)
+                    is_all_aux_or_adv = True
+                    for j in range(child.i+1, token.i):
+                        if doc[j].pos_ != 'ADV' or 'advmod' not in doc[j].dep_:
+                            if doc[j].pos_ != 'AUX' or 'aux' not in doc[j].dep_:
+                                is_all_aux_or_adv = False
+                                break
+                    if is_all_aux_or_adv:
+                        if child.i < min_forward_index:
+                            min_forward_index = child.i
+                        verbs.append(doc[child.i:token.i+1].text)
                 if child.pos_ == 'ADP' and 'advmod' in child.dep_:
                     verbs.append(child.text + ' ' + token.text)
-
+            verbs.append(doc[min_forward_index:max_afterward_index+1].text)
 
     # return a list of verb string
     return verbs
