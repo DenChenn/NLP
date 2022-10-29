@@ -145,6 +145,7 @@ def is_continuous(doc, start, end):
     return True
 
 index_list = []
+available_relation = ['aux', 'xcomp', 'prep', 'prt', 'advmod', 'neg', 'auxpass']
 
 def get_index_list(doc):
     for token in doc:
@@ -157,69 +158,27 @@ def get_verb_index(token):
     index_list.append(token.i)
 
     for child in token.children:
-        if 'aux' == child.dep_:
-            get_verb_index(child)
-        elif 'xcomp' == child.dep_:
-            get_verb_index(child)
-        elif 'prep' == child.dep_:
-            get_verb_index(child)
-        elif 'prt' == child.dep_:
-            get_verb_index(child)
-        elif 'advmod' == child.dep_:
-            get_verb_index(child)
-        elif 'auxpass' == child.dep_:
+        if child.dep_ in available_relation:
             get_verb_index(child)
     return
 
-def wrap_continuous():
+def return_and_reset():
     global index_list
     if len(index_list) == 0:
         return []
     index_list.sort()
-    wrapped_index_list = []
-    temp = [index_list[0]]
-    for i in range(1, len(index_list)):
-        if index_list[i] - index_list[i-1] == 1:
-            temp.append(index_list[i])
-        else:
-            wrapped_index_list.append(temp)
-            temp = [index_list[i]]
-    wrapped_index_list.append(temp)
-    # clear global index list
+    l = index_list.copy()
     index_list = []
-    return wrapped_index_list
+    return l
+
 
 def get_verb(doc):
     verbs = []
     for token in doc:
         if token.pos_ == 'VERB':
-            verbs.append(token.text)
-
-            min_forward_index = len(doc)
-            max_afterward_index = -1
-
-            for child in token.children:
-                if (child.pos_ == 'ADP' and 'prep' == child.dep_) or (child.pos_ == 'ADP' and 'prt' == child.dep_):
-                    verbs.append(token.text + ' ' + child.text)
-                    if is_continuous(doc, token.i+1, child.i):
-                        if child.i > max_afterward_index:
-                            max_afterward_index = child.i
-                        verbs.append(doc[token.i:child.i+1].text)
-
-                if (child.pos_ == 'AUX' and 'aux' == child.dep_) or (child.pos_ == 'ADP' and 'advmod' == child.dep_):
-                    verbs.append(child.text + ' ' + token.text)
-                    if is_continuous(doc, child.i+1, token.i):
-                        if child.i < min_forward_index:
-                            min_forward_index = child.i
-                        verbs.append(doc[child.i:token.i+1].text)
-
-            verbs.append(doc[min_forward_index:max_afterward_index+1].text)
-
-            # tree traversal
             get_verb_index(token)
-            index_2d = wrap_continuous()
-            for indexes in index_2d:
-                verbs.append(doc[indexes[0]:indexes[-1]+1].text)
+            indexes = return_and_reset()
+            verbs.append(doc[indexes[0]:indexes[-1]+1].text)
 
         if token.pos_ == 'AUX':
             for child in token.children:
@@ -239,6 +198,7 @@ def get_verb(doc):
 def get_output(row_data, subjects, verbs, object):
     is_subject = False
     is_object = False
+    is_verb = False
     for subj in subjects:
         if row_data[SUBJECT_COLUMN] in subj:
             is_subject = True
@@ -247,8 +207,14 @@ def get_output(row_data, subjects, verbs, object):
         if row_data[OBJECT_COLUMN] in obj:
             is_object = True
             break
+    for verb in verbs:
+        l1 = str(row_data[VERB_COLUMN]).split(' ')
+        l2 = verb.split(' ')
+        if set(l1).issubset(set(l2)):
+            is_verb = True
+            break
 
-    return int(is_subject and row_data[VERB_COLUMN] in verbs and is_object)
+    return int(is_subject and is_verb and is_object)
 
 def save_answer(predict):
     ans = pd.DataFrame(columns=['index','T/F'])
