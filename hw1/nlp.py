@@ -72,26 +72,31 @@ def get_subject(doc):
             end = subtree[-1].i + 1
             subjects.append(doc[start:end].text)
 
-        if 'advmod' in token.dep_ and token.head.pos_ == 'VERB':
+        if 'advmod' == token.dep_ and token.head.pos_ == 'VERB':
             subtree = list(token.subtree)
             start = subtree[0].i
             end = subtree[-1].i + 1
             subjects.append(doc[start:end].text)
 
-        if 'pobj' in token.dep_ and token.head.pos_ == 'ADP' and token.head.head.pos_ == 'VERB' and 'agent' in token.head.dep_:
+        if 'pobj' == token.dep_ and token.head.pos_ == 'ADP' and token.head.head.pos_ == 'VERB' and 'agent' == token.head.dep_:
             subtree = list(token.subtree)
             start = subtree[0].i
             end = subtree[-1].i + 1
             subjects.append(doc[start:end].text)
 
-        if 'conj' in token.dep_:
+        if 'conj' == token.dep_:
             for child in token.head.children:
-                if 'cc' in child.dep_ and child.pos_ == 'CCONJ':
+                if 'cc' == child.dep_ and child.pos_ == 'CCONJ':
                     subtree = list(token.subtree)
                     start = subtree[0].i
                     end = subtree[-1].i + 1
                     subjects.append(doc[start:end].text)
 
+        if 'nsubj' == token.dep_ and token.head.pos_ == 'VERB' and 'aux' == token.head.dep_:
+            subtree = list(token.subtree)
+            start = subtree[0].i
+            end = subtree[-1].i + 1
+            subjects.append(doc[start:end].text)
 
 
     return subjects
@@ -111,26 +116,78 @@ def get_object(doc):
             start = subtree[0].i
             end = subtree[-1].i + 1
             objects.append(doc[start:end].text)
-        if 'pobj' in token.dep_ and token.head.pos_ == 'ADP' and token.head.head.pos_ == 'VERB' and 'prep' in token.head.dep_:
+        if 'pobj' == token.dep_ and token.head.pos_ == 'ADP' and token.head.head.pos_ == 'VERB' and 'prep' == token.head.dep_:
             subtree = list(token.subtree)
             start = subtree[0].i
             end = subtree[-1].i + 1
             objects.append(doc[start:end].text)
-        if token.pos_ == 'ADV' and 'advmod' in token.dep_ and token.head.pos_ == 'VERB':
+        if token.pos_ == 'ADV' and 'advmod' == token.dep_ and token.head.pos_ == 'VERB':
             subtree = list(token.subtree)
             start = subtree[0].i
             end = subtree[-1].i + 1
             objects.append(doc[start:end].text)
 
+        if 'attr' in token.dep_ and token.head.pos_ == 'AUX':
+            for child in token.head.children:
+                if 'nsubj' in child.dep_:
+                    subtree = list(token.subtree)
+                    start = subtree[0].i
+                    end = subtree[-1].i + 1
+                    objects.append(doc[start:end].text)
+                    break
     return objects
 
 def is_continuous(doc, start, end):
     for i in range(start, end):
-        if doc[i].pos_ != 'ADV' or 'advmod' not in doc[i].dep_:
-            if doc[i].pos_ != 'AUX' or 'aux' not in doc[i].dep_:
+        if doc[i].pos_ != 'ADV' or 'advmod' != doc[i].dep_:
+            if doc[i].pos_ != 'AUX' or 'aux' != doc[i].dep_:
                 return False
     return True
 
+index_list = []
+
+def get_index_list(doc):
+    for token in doc:
+        if token.pos_ == 'VERB':
+            get_verb_index(token)
+def get_verb_index(token):
+    global index_list
+    if token.i in index_list:
+        return
+    index_list.append(token.i)
+
+    for child in token.children:
+        if 'aux' == child.dep_:
+            get_verb_index(child)
+        elif 'xcomp' == child.dep_:
+            get_verb_index(child)
+        elif 'prep' == child.dep_:
+            get_verb_index(child)
+        elif 'prt' == child.dep_:
+            get_verb_index(child)
+        elif 'advmod' == child.dep_:
+            get_verb_index(child)
+        elif 'auxpass' == child.dep_:
+            get_verb_index(child)
+    return
+
+def wrap_continuous():
+    global index_list
+    if len(index_list) == 0:
+        return []
+    index_list.sort()
+    wrapped_index_list = []
+    temp = [index_list[0]]
+    for i in range(1, len(index_list)):
+        if index_list[i] - index_list[i-1] == 1:
+            temp.append(index_list[i])
+        else:
+            wrapped_index_list.append(temp)
+            temp = [index_list[i]]
+    wrapped_index_list.append(temp)
+    # clear global index list
+    index_list = []
+    return wrapped_index_list
 
 def get_verb(doc):
     verbs = []
@@ -142,14 +199,14 @@ def get_verb(doc):
             max_afterward_index = -1
 
             for child in token.children:
-                if (child.pos_ == 'ADP' and 'prep' in child.dep_) or (child.pos_ == 'ADP' and 'prt' in child.dep_):
+                if (child.pos_ == 'ADP' and 'prep' == child.dep_) or (child.pos_ == 'ADP' and 'prt' == child.dep_):
                     verbs.append(token.text + ' ' + child.text)
                     if is_continuous(doc, token.i+1, child.i):
                         if child.i > max_afterward_index:
                             max_afterward_index = child.i
                         verbs.append(doc[token.i:child.i+1].text)
 
-                if (child.pos_ == 'AUX' and 'aux' in child.dep_) or (child.pos_ == 'ADP' and 'advmod' in child.dep_):
+                if (child.pos_ == 'AUX' and 'aux' == child.dep_) or (child.pos_ == 'ADP' and 'advmod' == child.dep_):
                     verbs.append(child.text + ' ' + token.text)
                     if is_continuous(doc, child.i+1, token.i):
                         if child.i < min_forward_index:
@@ -157,6 +214,24 @@ def get_verb(doc):
                         verbs.append(doc[child.i:token.i+1].text)
 
             verbs.append(doc[min_forward_index:max_afterward_index+1].text)
+
+            # tree traversal
+            get_verb_index(token)
+            index_2d = wrap_continuous()
+            for indexes in index_2d:
+                verbs.append(doc[indexes[0]:indexes[-1]+1].text)
+
+        if token.pos_ == 'AUX':
+            for child in token.children:
+                if 'nsubj' == child.dep_:
+                    verbs.append(child.text + ' ' + token.text)
+
+                if 'attr' == child.dep_:
+                    for child2 in child.children:
+                        if 'prep' == child2.dep_:
+                            verbs.append(token.text + ' ' + child.text + ' ' + child2.text)
+            if 'auxpass' == token.dep_:
+                verbs.append(token.text)
 
     # return a list of verb string
     return verbs
@@ -183,18 +258,17 @@ def save_answer(predict):
 
 if __name__ == '__main__':
     # change between formal case and test case
-    data = read_data(TEST_CASE)
+    data = read_data(FORMAL_CASE)
     nlp = spacy.load('en_core_web_trf')
     predict = []
 
     for i in trange(len(data)):
-        doc = data.at[i, SENTENCE_COLUMN]
-        subject_list = get_subject(nlp(doc))
-        object_list = get_object(nlp(doc))
-        verb_list = get_verb(nlp(doc))
+        sen = data.at[i, SENTENCE_COLUMN]
+        subject_list = get_subject(nlp(sen))
+        object_list = get_object(nlp(sen))
+        verb_list = get_verb(nlp(sen))
         output = get_output(data.iloc[i], subject_list, verb_list, object_list)
         predict.append(PredictResult(output, i, subject_list, verb_list, object_list))
 
-    validate(data[OUTPUT_COLUMN].tolist(), predict)
-    #save_answer(predict)
-
+    #validate(data[OUTPUT_COLUMN].tolist(), predict)
+    save_answer(predict)
