@@ -17,11 +17,11 @@ TEST_CASE = 'example_with_answer.csv'
 FORMAL_CASE = 'dataset.csv'
 
 class PredictResult:
-    def __init__(self, output, row_index, data, patches):
+    def __init__(self, output, row_index, data, vso):
         self.output = output
         self.row_index = row_index
         self.data = data
-        self.patches = patches
+        self.vso = vso
 
 def validate(answer, predict):
     if len(answer) != len(predict):
@@ -49,8 +49,9 @@ def validate(answer, predict):
         print('Expected Subject: "', w.data[SUBJECT_COLUMN], '"')
         print('Expected Object: "', w.data[OBJECT_COLUMN], '"')
         print('Predicted patches: ')
-        for p in w.patches:
-            print(p)
+        print('Verb: ', w.vso[0])
+        print('Subject: ', w.vso[1])
+        print('Object: ', w.vso[2])
         print('======')
 
 
@@ -199,7 +200,9 @@ def concat(doc, list_of_index):
 
 def get_patch(doc):
     # [["verb", "subject", "object"]]
-    patches = []
+    verbs = []
+    subjects = []
+    objects = []
 
     for token in doc:
         children_deps = list(token.dep_ for token in token.children)
@@ -208,7 +211,6 @@ def get_patch(doc):
             get_verb_index(token, [], True)
             seq_set = return_and_reset()
 
-            verbs = []
             for seq in seq_set:
                 verbs.append(concat(doc, seq))
 
@@ -221,24 +223,26 @@ def get_patch(doc):
 
 
             # find subject related to this verb
-            subjects = get_subject(doc, token)
+            for s in get_subject(doc, token):
+                subjects.append(s)
 
             # find object related to this verb
-            objects = get_object(doc, token)
+            for o in get_object(doc, token):
+                objects.append(o)
 
-            # push into list of patches
-            for verb in verbs:
-                if len(subjects) == 0:
-                    patches.append([verb, '', ''])
-                    continue
-                for sub in subjects:
-                    if len(objects) == 0:
-                        patches.append([verb, sub, ''])
-                        continue
-                    for obj in objects:
-                        patches.append([verb, sub, obj])
+            # # push into list of patches
+            # for verb in verbs:
+            #     if len(subjects) == 0:
+            #         patches.append([verb, '', ''])
+            #         continue
+            #     for sub in subjects:
+            #         if len(objects) == 0:
+            #             patches.append([verb, sub, ''])
+            #             continue
+            #         for obj in objects:
+            #             patches.append([verb, sub, obj])
 
-    return patches
+    return [verbs, subjects, objects]
 
 def is_subset(s1, s2):
     l1 = str(s1).split(' ')
@@ -247,20 +251,22 @@ def is_subset(s1, s2):
         return True
     return False
 
-def get_output(row_data, patches):
-    for p in patches:
-        is_subject = False
-        is_object = False
-        is_verb = False
-        if is_subset(row_data[VERB_COLUMN], p[0]):
+def get_output(row_data, p):
+    is_subject = False
+    is_object = False
+    is_verb = False
+    for v in p[0]:
+        if is_subset(row_data[VERB_COLUMN], v):
             is_verb = True
-        if is_subset(row_data[SUBJECT_COLUMN], p[1]):
+    for s in p[1]:
+        if is_subset(row_data[SUBJECT_COLUMN], s):
             is_subject = True
-        if is_subset(row_data[OBJECT_COLUMN], p[2]):
+    for o in p[2]:
+        if is_subset(row_data[OBJECT_COLUMN], o):
             is_object = True
 
-        if is_verb and is_subject and is_object:
-            return 1
+    if is_verb and is_subject and is_object:
+        return 1
     return 0
 
 def save_answer(predict):
