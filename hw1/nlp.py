@@ -173,13 +173,7 @@ def return_and_reset():
 
 
 def distribute(list_of_index):
-    flatten = []
-    for l in list_of_index:
-        for idx in l:
-            if idx not in flatten:
-                flatten.append(idx)
-
-    flatten.sort()
+    flatten = flatten_arr(list_of_index)
     temp = [flatten[0]]
     result = []
     for k in range(1, len(flatten)):
@@ -190,6 +184,15 @@ def distribute(list_of_index):
             temp = [flatten[k]]
     result.append(temp)
     return result
+
+def flatten_arr(list_of_list):
+    f = []
+    for l in list_of_list:
+        for idx in l:
+            if idx not in f:
+                f.append(idx)
+    f.sort()
+    return f
 
 def concat(doc, list_of_index):
     return ' '.join([doc[x].text for x in list_of_index])
@@ -209,9 +212,13 @@ def get_patch(doc):
             for seq in seq_set:
                 verbs.append(concat(doc, seq))
 
-            continuous_seq_set = distribute(seq_set)
+            continuous_seq_set = distribute(seq_set.copy())
             for seq in continuous_seq_set:
                 verbs.append(concat(doc, seq))
+
+            flatten_seq_set = flatten_arr(seq_set.copy())
+            verbs.append(concat(doc, flatten_seq_set))
+
 
             # find subject related to this verb
             subjects = get_subject(doc, token)

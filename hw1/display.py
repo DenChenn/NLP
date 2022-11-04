@@ -6,4 +6,4 @@ def display_dpc_graph(doc):
 data = read_data(TEST_CASE)
 nlp = spacy.load('en_core_web_trf')
 predict = []
-display_dpc_graph(nlp(data.at[35, SENTENCE_COLUMN]))
+display_dpc_graph(nlp(data.at[42, SENTENCE_COLUMN]))
