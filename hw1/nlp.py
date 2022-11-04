@@ -17,12 +17,11 @@ TEST_CASE = 'example_with_answer.csv'
 FORMAL_CASE = 'dataset.csv'
 
 class PredictResult:
-    def __init__(self, output, row_index, predicted_subject, predicted_verb, predicted_object):
+    def __init__(self, output, row_index, data, patches):
         self.output = output
         self.row_index = row_index
-        self.predicted_subject = predicted_subject
-        self.predicted_verb = predicted_verb
-        self.predicted_object = predicted_object
+        self.data = data
+        self.patches = patches
 
 def validate(answer, predict):
     if len(answer) != len(predict):
@@ -46,9 +45,12 @@ def validate(answer, predict):
     for w in wrong:
         print('Row index: ', w.row_index)
         print('Output: ', w.output)
-        print('Predicted subject: ', w.predicted_subject)
-        print('Predicted verb: ', w.predicted_verb)
-        print('Predicted object: ', w.predicted_object)
+        print('Expected Verb: "', w.data[VERB_COLUMN], '"')
+        print('Expected Subject: "', w.data[SUBJECT_COLUMN], '"')
+        print('Expected Object: "', w.data[OBJECT_COLUMN], '"')
+        print('Predicted patches: ')
+        for p in w.patches:
+            print(p)
         print('======')
 
 
@@ -63,48 +65,50 @@ def read_data(filepath):
                                             OBJECT_COLUMN], header=None)
         return df
 
-def get_subject(doc):
+def get_subject(doc, verb_token):
     subjects = []
+
+    # 關係子句
+    if 'relcl' in verb_token.dep_:
+        subtree = list(verb_token.head.subtree)
+        start = subtree[0].i
+        end = subtree[-1].i + 1
+        subjects.append(doc[start:end].text)
+
+    # 連接詞後的子句
+    if 'acl' in verb_token.dep_:
+        subtree = list(verb_token.head.subtree)
+        start = subtree[0].i
+        end = subtree[-1].i + 1
+        subjects.append(doc[start:end].text)
+
     for token in doc:
-        if 'subj' in token.dep_:
+        if 'subj' in token.dep_ and token.head.i == verb_token.i:
             subtree = list(token.subtree)
             start = subtree[0].i
             end = subtree[-1].i + 1
             subjects.append(doc[start:end].text)
 
-        if 'advmod' == token.dep_ and token.head.pos_ == 'VERB':
+        if 'advmod' == token.dep_ and token.head.i == verb_token.i:
             subtree = list(token.subtree)
             start = subtree[0].i
             end = subtree[-1].i + 1
             subjects.append(doc[start:end].text)
 
-        if 'pobj' == token.dep_ and token.head.pos_ == 'ADP' and token.head.head.pos_ == 'VERB' and 'agent' == token.head.dep_:
+        # passive verb's subject
+        if 'pobj' == token.dep_ and token.head.pos_ == 'ADP' and token.head.head.i == verb_token.i and 'agent' == token.head.dep_:
             subtree = list(token.subtree)
             start = subtree[0].i
             end = subtree[-1].i + 1
             subjects.append(doc[start:end].text)
-
-        if 'conj' == token.dep_:
-            for child in token.head.children:
-                if 'cc' == child.dep_ and child.pos_ == 'CCONJ':
-                    subtree = list(token.subtree)
-                    start = subtree[0].i
-                    end = subtree[-1].i + 1
-                    subjects.append(doc[start:end].text)
-
-        if 'nsubj' == token.dep_ and token.head.pos_ == 'VERB' and 'aux' == token.head.dep_:
-            subtree = list(token.subtree)
-            start = subtree[0].i
-            end = subtree[-1].i + 1
-            subjects.append(doc[start:end].text)
-
 
     return subjects
 
-def get_object(doc):
+def get_object(doc, verb_token):
     objects = []
     for token in doc:
-        if 'dobj' in token.dep_:
+        if 'obj' in token.dep_ and token.head.i == verb_token.i:
+            # special case : "have trouble telling" -> trouble is the object
             is_not_object = False
             for child in token.children:
                 if 'acl' in child.dep_ and child.pos_ == 'VERB':
@@ -116,105 +120,141 @@ def get_object(doc):
             start = subtree[0].i
             end = subtree[-1].i + 1
             objects.append(doc[start:end].text)
-        if 'pobj' == token.dep_ and token.head.pos_ == 'ADP' and token.head.head.pos_ == 'VERB' and 'prep' == token.head.dep_:
-            subtree = list(token.subtree)
-            start = subtree[0].i
-            end = subtree[-1].i + 1
-            objects.append(doc[start:end].text)
-        if token.pos_ == 'ADV' and 'advmod' == token.dep_ and token.head.pos_ == 'VERB':
+
+        # 動詞片語後面的也有可能是受詞
+        if 'pobj' == token.dep_ and token.head.pos_ == 'ADP' and token.head.head.i == verb_token.i and 'prep' == token.head.dep_:
             subtree = list(token.subtree)
             start = subtree[0].i
             end = subtree[-1].i + 1
             objects.append(doc[start:end].text)
 
-        if 'attr' in token.dep_ and token.head.pos_ == 'AUX':
+        if token.pos_ == 'ADV' and 'advmod' == token.dep_ and token.head.i == verb_token.i:
+            subtree = list(token.subtree)
+            start = subtree[0].i
+            end = subtree[-1].i + 1
+            objects.append(doc[start:end].text)
+
+        if 'attr' in token.dep_ and token.head.i == verb_token.i:
             for child in token.head.children:
                 if 'nsubj' in child.dep_:
                     subtree = list(token.subtree)
                     start = subtree[0].i
                     end = subtree[-1].i + 1
                     objects.append(doc[start:end].text)
-                    break
     return objects
 
-def is_continuous(doc, start, end):
-    for i in range(start, end):
-        if doc[i].pos_ != 'ADV' or 'advmod' != doc[i].dep_:
-            if doc[i].pos_ != 'AUX' or 'aux' != doc[i].dep_:
-                return False
-    return True
 
-index_list = []
-available_relation = ['aux', 'xcomp', 'prep', 'prt', 'advmod', 'neg', 'auxpass']
+verb_index_list = []
+verb_relation = ['aux', 'xcomp', 'prep', 'prt', 'advmod', 'neg', 'auxpass', 'nsubj', 'attr']
 
-def get_index_list(doc):
-    for token in doc:
-        if token.pos_ == 'VERB':
-            get_verb_index(token)
-def get_verb_index(token):
-    global index_list
-    if token.i in index_list:
-        return
-    index_list.append(token.i)
+def get_verb_index(token, branch, is_edge):
+    branch.append(token.i)
 
     for child in token.children:
-        if child.dep_ in available_relation:
-            get_verb_index(child)
+        if child.dep_ in verb_relation:
+            is_edge = False
+            get_verb_index(child, branch.copy(), True)
+
+    if is_edge:
+        global verb_index_list
+        branch.sort()
+        verb_index_list.append(branch)
+
     return
 
 def return_and_reset():
-    global index_list
-    if len(index_list) == 0:
+    global verb_index_list
+    if len(verb_index_list) == 0:
         return []
-    index_list.sort()
-    l = index_list.copy()
-    index_list = []
+    #verb_index_list.sort()
+    l = verb_index_list.copy()
+    verb_index_list = []
     return l
 
 
-def get_verb(doc):
-    verbs = []
+def distribute(list_of_index):
+    flatten = []
+    for l in list_of_index:
+        for idx in l:
+            if idx not in flatten:
+                flatten.append(idx)
+
+    flatten.sort()
+    temp = [flatten[0]]
+    result = []
+    for k in range(1, len(flatten)):
+        if flatten[k] - flatten[k-1] == 1:
+            temp.append(flatten[k])
+        else:
+            result.append(temp)
+            temp = [flatten[k]]
+    result.append(temp)
+    return result
+
+def concat(doc, list_of_index):
+    return ' '.join([doc[x].text for x in list_of_index])
+
+def get_patch(doc):
+    # [["verb", "subject", "object"]]
+    patches = []
+
     for token in doc:
-        if token.pos_ == 'VERB':
-            get_verb_index(token)
-            indexes = return_and_reset()
-            verbs.append(doc[indexes[0]:indexes[-1]+1].text)
+        children_deps = list(token.dep_ for token in token.children)
+        if (token.pos_ == 'VERB') or (token.pos_ == 'AUX' and 'relcl' == token.dep_) or (token.pos_ == 'AUX' and 'attr' in children_deps):
+            # 1. find verb
+            get_verb_index(token, [], True)
+            seq_set = return_and_reset()
 
-        if token.pos_ == 'AUX':
-            for child in token.children:
-                if 'nsubj' == child.dep_:
-                    verbs.append(child.text + ' ' + token.text)
+            verbs = []
+            for seq in seq_set:
+                verbs.append(concat(doc, seq))
 
-                if 'attr' == child.dep_:
-                    for child2 in child.children:
-                        if 'prep' == child2.dep_:
-                            verbs.append(token.text + ' ' + child.text + ' ' + child2.text)
-            if 'auxpass' == token.dep_:
-                verbs.append(token.text)
+            continuous_seq_set = distribute(seq_set)
+            for seq in continuous_seq_set:
+                verbs.append(concat(doc, seq))
 
-    # return a list of verb string
-    return verbs
+            # find subject related to this verb
+            subjects = get_subject(doc, token)
 
-def get_output(row_data, subjects, verbs, object):
-    is_subject = False
-    is_object = False
-    is_verb = False
-    for subj in subjects:
-        if row_data[SUBJECT_COLUMN] in subj:
-            is_subject = True
-            break
-    for obj in object:
-        if row_data[OBJECT_COLUMN] in obj:
-            is_object = True
-            break
-    for verb in verbs:
-        l1 = str(row_data[VERB_COLUMN]).split(' ')
-        l2 = verb.split(' ')
-        if set(l1).issubset(set(l2)):
+            # find object related to this verb
+            objects = get_object(doc, token)
+
+            # push into list of patches
+            for verb in verbs:
+                if len(subjects) == 0:
+                    patches.append([verb, '', ''])
+                    continue
+                for sub in subjects:
+                    if len(objects) == 0:
+                        patches.append([verb, sub, ''])
+                        continue
+                    for obj in objects:
+                        patches.append([verb, sub, obj])
+
+    return patches
+
+def is_subset(s1, s2):
+    l1 = str(s1).split(' ')
+    l2 = str(s2).split(' ')
+    if set(l1).issubset(set(l2)):
+        return True
+    return False
+
+def get_output(row_data, patches):
+    for p in patches:
+        is_subject = False
+        is_object = False
+        is_verb = False
+        if is_subset(row_data[VERB_COLUMN], p[0]):
             is_verb = True
-            break
+        if is_subset(row_data[SUBJECT_COLUMN], p[1]):
+            is_subject = True
+        if is_subset(row_data[OBJECT_COLUMN], p[2]):
+            is_object = True
 
-    return int(is_subject and is_verb and is_object)
+        if is_verb and is_subject and is_object:
+            return 1
+    return 0
 
 def save_answer(predict):
     ans = pd.DataFrame(columns=['index','T/F'])
@@ -230,11 +270,9 @@ if __name__ == '__main__':
 
     for i in trange(len(data)):
         sen = data.at[i, SENTENCE_COLUMN]
-        subject_list = get_subject(nlp(sen))
-        object_list = get_object(nlp(sen))
-        verb_list = get_verb(nlp(sen))
-        output = get_output(data.iloc[i], subject_list, verb_list, object_list)
-        predict.append(PredictResult(output, i, subject_list, verb_list, object_list))
+        patches = get_patch(nlp(sen))
+        output = get_output(data.iloc[i], patches)
+        predict.append(PredictResult(output, i, data.iloc[i], patches))
 
     #validate(data[OUTPUT_COLUMN].tolist(), predict)
     save_answer(predict)
