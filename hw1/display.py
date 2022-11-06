@@ -1,4 +1,5 @@
 from nlp import *
+from spacy import displacy
 
 def display_dpc_graph(doc):
     displacy.serve(doc, style='dep', port=3000)

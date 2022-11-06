@@ -4,7 +4,6 @@
 
 import pandas as pd
 import spacy
-from spacy import displacy
 from tqdm import trange
 
 INDEX_COLUMN = 'index'
@@ -145,7 +144,7 @@ def get_object(doc, verb_token):
     return objects
 
 
-verb_index_list = []
+verb_longest_path_list = []
 verb_relation = ['aux', 'xcomp', 'prep', 'prt', 'advmod', 'neg', 'auxpass', 'nsubj', 'attr']
 
 def get_verb_index(token, branch, is_edge):
@@ -157,38 +156,37 @@ def get_verb_index(token, branch, is_edge):
             get_verb_index(child, branch.copy(), True)
 
     if is_edge:
-        global verb_index_list
+        global verb_longest_path_list
         branch.sort()
-        verb_index_list.append(branch)
+        verb_longest_path_list.append(branch)
 
     return
 
-def return_and_reset():
-    global verb_index_list
-    if len(verb_index_list) == 0:
+def copy_and_reset():
+    global verb_longest_path_list
+    if len(verb_longest_path_list) == 0:
         return []
-    #verb_index_list.sort()
-    l = verb_index_list.copy()
-    verb_index_list = []
+    
+    l = verb_longest_path_list.copy()
+    verb_longest_path_list = []
     return l
 
 
-def distribute(list_of_index):
-    flatten = flatten_arr(list_of_index)
-    temp = [flatten[0]]
+def find_continuous(arr_1d):
+    temp = [arr_1d[0]]
     result = []
-    for k in range(1, len(flatten)):
-        if flatten[k] - flatten[k-1] == 1:
-            temp.append(flatten[k])
+    for k in range(1, len(arr_1d)):
+        if arr_1d[k] - arr_1d[k-1] == 1:
+            temp.append(arr_1d[k])
         else:
             result.append(temp)
-            temp = [flatten[k]]
+            temp = [arr_1d[k]]
     result.append(temp)
     return result
 
-def flatten_arr(list_of_list):
+def flatten_arr(arr_2d):
     f = []
-    for l in list_of_list:
+    for l in arr_2d:
         for idx in l:
             if idx not in f:
                 f.append(idx)
@@ -199,7 +197,6 @@ def concat(doc, list_of_index):
     return ' '.join([doc[x].text for x in list_of_index])
 
 def get_patch(doc):
-    # [["verb", "subject", "object"]]
     verbs = []
     subjects = []
     objects = []
@@ -207,20 +204,19 @@ def get_patch(doc):
     for token in doc:
         children_deps = list(token.dep_ for token in token.children)
         if (token.pos_ == 'VERB') or (token.pos_ == 'AUX' and 'relcl' == token.dep_) or (token.pos_ == 'AUX' and 'attr' in children_deps):
-            # 1. find verb
+            # find verb
             get_verb_index(token, [], True)
-            seq_set = return_and_reset()
+            verb_2d_arr = copy_and_reset()
 
-            for seq in seq_set:
-                verbs.append(concat(doc, seq))
+            for verb_list in verb_2d_arr:
+                verbs.append(concat(doc, verb_list))
 
-            continuous_seq_set = distribute(seq_set.copy())
-            for seq in continuous_seq_set:
-                verbs.append(concat(doc, seq))
+            verb_1d_arr = flatten_arr(verb_2d_arr.copy())
+            verbs.append(concat(doc, verb_1d_arr))
 
-            flatten_seq_set = flatten_arr(seq_set.copy())
-            verbs.append(concat(doc, flatten_seq_set))
-
+            continuous_verb_2d_arr = find_continuous(verb_1d_arr.copy())
+            for verb_arr in continuous_verb_2d_arr:
+                verbs.append(concat(doc, verb_arr))
 
             # find subject related to this verb
             for s in get_subject(doc, token):
@@ -229,18 +225,6 @@ def get_patch(doc):
             # find object related to this verb
             for o in get_object(doc, token):
                 objects.append(o)
-
-            # # push into list of patches
-            # for verb in verbs:
-            #     if len(subjects) == 0:
-            #         patches.append([verb, '', ''])
-            #         continue
-            #     for sub in subjects:
-            #         if len(objects) == 0:
-            #             patches.append([verb, sub, ''])
-            #             continue
-            #         for obj in objects:
-            #             patches.append([verb, sub, obj])
 
     return [verbs, subjects, objects]
 
@@ -265,9 +249,7 @@ def get_output(row_data, p):
         if is_subset(row_data[OBJECT_COLUMN], o):
             is_object = True
 
-    if is_verb and is_subject and is_object:
-        return 1
-    return 0
+    return int(is_verb and is_subject and is_object)
 
 def save_answer(predict):
     ans = pd.DataFrame(columns=['index','T/F'])
