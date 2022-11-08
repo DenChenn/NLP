@@ -196,7 +196,7 @@ def flatten_arr(arr_2d):
 def concat(doc, list_of_index):
     return ' '.join([doc[x].text for x in list_of_index])
 
-def get_patch(doc):
+def get_predict(doc):
     verbs = []
     subjects = []
     objects = []
@@ -265,7 +265,7 @@ if __name__ == '__main__':
 
     for i in trange(len(data)):
         sen = data.at[i, SENTENCE_COLUMN]
-        patches = get_patch(nlp(sen))
+        patches = get_predict(nlp(sen))
         output = get_output(data.iloc[i], patches)
         predict.append(PredictResult(output, i, data.iloc[i], patches))
 
