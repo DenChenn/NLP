@@ -172,18 +172,6 @@ def copy_and_reset():
     return l
 
 
-def find_continuous(arr_1d):
-    temp = [arr_1d[0]]
-    result = []
-    for k in range(1, len(arr_1d)):
-        if arr_1d[k] - arr_1d[k-1] == 1:
-            temp.append(arr_1d[k])
-        else:
-            result.append(temp)
-            temp = [arr_1d[k]]
-    result.append(temp)
-    return result
-
 def flatten_arr(arr_2d):
     f = []
     for l in arr_2d:
@@ -213,10 +201,6 @@ def get_predict(doc):
 
             verb_1d_arr = flatten_arr(verb_2d_arr.copy())
             verbs.append(concat(doc, verb_1d_arr))
-
-            continuous_verb_2d_arr = find_continuous(verb_1d_arr.copy())
-            for verb_arr in continuous_verb_2d_arr:
-                verbs.append(concat(doc, verb_arr))
 
             # find subject related to this verb
             for s in get_subject(doc, token):
