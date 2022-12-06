@@ -2,6 +2,7 @@ from torchtext.legacy.data import Field, LabelField, TabularDataset, Iterator
 import torch
 import pandas as pd
 from sklearn.model_selection import train_test_split
+import torch.nn as nn
 
 P_TRAIN_CSV = 'p_train.csv'
 P_VALID_CSV = 'p_val.csv'
@@ -63,6 +64,26 @@ class Preprocess:
     def run(self):
         self.select_and_save()
         self.word_embedding()
+
+
+class RNN(nn.Module):
+    def __init__(self, input_dim, embedding_dim, hidden_dim, output_dim):
+        super().__init__()
+        self.embedding = nn.Embedding(input_dim, embedding_dim)
+        self.rnn = nn.RNN(embedding_dim, hidden_dim)
+        self.fc = nn.Linear(hidden_dim, output_dim)
+
+    def forward(self, text):
+        # text = [sent len, batch size]
+        embedded = self.embedding(text)
+
+        # embedded = [sent len, batch size, emb dim]
+        output, hidden = self.rnn(embedded)
+
+        # output = [sent len, batch size, hid dim]
+        # hidden = [1, batch size, hid dim]
+        assert torch.equal(output[-1, :, :], hidden.squeeze(0))
+        return self.fc(hidden.squeeze(0))
 
 
 if __name__ == '__main__':
