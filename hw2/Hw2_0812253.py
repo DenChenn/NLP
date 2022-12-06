@@ -1,6 +1,7 @@
 from torchtext.legacy.data import Field, LabelField, TabularDataset, Iterator
 import torch
 import pandas as pd
+from sklearn.model_selection import train_test_split
 
 P_TRAIN_CSV = 'p_train.csv'
 P_VALID_CSV = 'p_val.csv'
@@ -8,21 +9,25 @@ P_TEST_CSV = 'p_test.csv'
 
 
 class Preprocess:
-    def __init__(self, train_path, test_path, valid_path):
+    def __init__(self, train_path, test_path):
         self.train_df = pd.read_csv(train_path)
         self.test_df = pd.read_csv(test_path)
-        self.valid_df = pd.read_csv(valid_path)
+        self.valid_df = None
         self.test_iter = None
         self.val_iter = None
         self.train_iter = None
 
     def select_and_save(self):
         self.train_df = self.train_df[['Utterance', 'Emotion']]
-        self.valid_df = self.valid_df[['Utterance', 'Emotion']]
-        self.test_df = self.test_df[['Utterance']]
+        self.test_df = self.test_df[['Utterance', 'Emotion']]
+        # separate training set to training set and validation set
+        self.train_df, self.valid_df = train_test_split(self.train_df, test_size=0.1)
         self.train_df.to_csv(P_TRAIN_CSV, header=False, index=False)
         self.test_df.to_csv(P_TEST_CSV, header=False, index=False)
         self.valid_df.to_csv(P_VALID_CSV, header=False, index=False)
+        print(len(self.train_df))
+        print(len(self.valid_df))
+        print(len(self.test_df))
 
     def word_embedding(self):
         text = Field(tokenize='spacy', lower=True, tokenizer_language='en_core_web_sm')
@@ -37,8 +42,9 @@ class Preprocess:
             format='csv',
             fields=[('Utterance', text), ('Emotion', label)]
         )
-
         print(vars(train.examples[0]))
+        print(vars(val.examples[0]))
+        print(vars(test.examples[0]))
 
         # the model will use the GloVe word vectors trained on:
         # 6 billion words with 100 dimensions per word
@@ -54,13 +60,11 @@ class Preprocess:
             device=-1
         )
 
-        print(text.vocab.vectors)
-
     def run(self):
         self.select_and_save()
         self.word_embedding()
 
 
 if __name__ == '__main__':
-    pre = Preprocess('train.csv', 'test.csv', 'dev.csv')
+    pre = Preprocess('train.csv', 'dev.csv')
     pre.run()
