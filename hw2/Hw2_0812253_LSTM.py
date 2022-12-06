@@ -1,4 +1,4 @@
-from torchtext.legacy.data import Field, LabelField, TabularDataset, Iterator
+from torchtext.legacy.data import Field, LabelField, TabularDataset, BucketIterator
 import torch
 import pandas as pd
 from sklearn.model_selection import train_test_split
@@ -22,6 +22,8 @@ class Preprocess:
         self.train_iter = None
         self.input_dim = None
         self.embedding_dim = None
+        self.text = None
+        self.label = None
 
     def select_and_save(self):
         self.train_df = self.train_df[['Utterance', 'Emotion']]
@@ -36,8 +38,13 @@ class Preprocess:
         print(len(self.test_df))
 
     def word_embedding(self):
-        text = Field(tokenize='spacy', lower=True, tokenizer_language='en_core_web_sm')
-        label = LabelField(dtype=torch.float)
+        self.text = Field(
+            tokenize='spacy',
+            lower=True,
+            tokenizer_language='en_core_web_sm',
+            include_lengths=True
+        )
+        self.label = LabelField(dtype=torch.float)
 
         # fields is recognized by order of csv column index, here is first two column
         train, val, test = TabularDataset.splits(
@@ -46,7 +53,7 @@ class Preprocess:
             validation=P_VALID_CSV,
             test=P_TEST_CSV,
             format='csv',
-            fields=[('Utterance', text), ('Emotion', label)]
+            fields=[('Utterance', self.text), ('Emotion', self.label)]
         )
         print(vars(train.examples[0]))
         print(vars(val.examples[0]))
@@ -54,23 +61,30 @@ class Preprocess:
 
         # the model will use the GloVe word vectors trained on:
         # 6 billion words with 100 dimensions per word
-        text.build_vocab(train, vectors="glove.6B.100d")
-        label.build_vocab(train)
+        self.text.build_vocab(
+            train,
+            max_size=25_000,
+            vectors="glove.6B.100d",
+            unk_init=torch.Tensor.normal_
+        )
+        self.label.build_vocab(train)
         self.embedding_dim = 100
-        self.input_dim = len(text.vocab)
-        print(text.vocab.vectors.shape)
-        print(f"Unique tokens in TEXT vocabulary: {len(text.vocab)}")
-        print(f"Unique tokens in LABEL vocabulary: {len(label.vocab)}")
+        self.input_dim = len(self.text.vocab)
+        print(self.text.vocab.vectors.shape)
+        print(f"Unique tokens in TEXT vocabulary: {len(self.text.vocab)}")
+        print(f"Unique tokens in LABEL vocabulary: {len(self.label.vocab)}")
 
         # this will return the iterator for each dataset
         # in each dataset, it is sorted by the length of text
         # the device argument is used to specify using the CPU
-        self.train_iter, self.val_iter, self.test_iter = Iterator.splits(
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        self.train_iter, self.val_iter, self.test_iter = BucketIterator.splits(
             (train, val, test),
+            batch_size=16,
+            sort_within_batch=False,
             sort_key=lambda x: len(x.Utterance),
-            batch_sizes=(32, 256, 256),
-            device=-1
-        )
+            device=device)
 
     def run(self):
         self.select_and_save()
@@ -78,23 +92,43 @@ class Preprocess:
 
 
 class RNN(nn.Module):
-    def __init__(self, input_dim, embedding_dim, hidden_dim, output_dim):
+    def __init__(self, vocab_size, embedding_dim, hidden_dim, output_dim, n_layers,
+                 bidirectional, dropout, pad_idx):
         super().__init__()
-        self.embedding = nn.Embedding(input_dim, embedding_dim)
-        self.rnn = nn.RNN(embedding_dim, hidden_dim)
-        self.fc = nn.Linear(hidden_dim, output_dim)
+        self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx = pad_idx)
+        self.rnn = nn.LSTM(embedding_dim,
+                           hidden_dim,
+                           num_layers=n_layers,
+                           bidirectional=bidirectional,
+                           dropout=dropout)
+        self.fc = nn.Linear(hidden_dim * 2, output_dim)
+        self.dropout = nn.Dropout(dropout)
 
-    def forward(self, text):
+    def forward(self, text, text_lengths):
         # text = [sent len, batch size]
-        embedded = self.embedding(text)
+        embedded = self.dropout(self.embedding(text))
 
         # embedded = [sent len, batch size, emb dim]
-        output, hidden = self.rnn(embedded)
+        # pack sequence
+        # lengths need to be on CPU!
+        packed_embedded = nn.utils.rnn.pack_padded_sequence(embedded, text_lengths.to('cpu'))
+        packed_output, (hidden, cell) = self.rnn(packed_embedded)
 
-        # output = [sent len, batch size, hid dim]
-        # hidden = [1, batch size, hid dim]
-        assert torch.equal(output[-1, :, :], hidden.squeeze(0))
-        return self.fc(hidden.squeeze(0))
+        # unpack sequence
+
+        # output = [sent len, batch size, hid dim * num directions]
+        # output over padding tokens are zero tensors
+
+        # hidden = [num layers * num directions, batch size, hid dim]
+        # cell = [num layers * num directions, batch size, hid dim]
+
+        # concat the final forward (hidden[-2,:,:]) and backward (hidden[-1,:,:]) hidden layers
+        # and apply dropout
+        hidden = self.dropout(torch.cat((hidden[-2,:,:], hidden[-1,:,:]), dim = 1))
+
+        # hidden = [batch size, hid dim * num directions]
+
+        return self.fc(hidden)
 
 
 def binary_accuracy(preds, y):
@@ -117,13 +151,12 @@ def train(model, iterator, optimizer, criterion):
 
     for batch in iterator:
         optimizer.zero_grad()
-        predictions = model(batch.Utterance).squeeze(1)
+        text, text_lengths = batch.Utterance
+        predictions = model(text, text_lengths).squeeze(1)
         loss = criterion(predictions, batch.Emotion)
         acc = binary_accuracy(predictions, batch.Emotion)
         loss.backward()
-
         optimizer.step()
-
         epoch_loss += loss.item()
         epoch_acc += acc.item()
 
@@ -138,10 +171,6 @@ def evaluate(model, iterator, criterion):
     with torch.no_grad():
         for batch in iterator:
             predictions = model(batch.Utterance).squeeze(1)
-            print('----------------')
-            print(predictions)
-            print(batch.Emotion)
-            print('----------------')
             loss = criterion(predictions, batch.Emotion)
             acc = binary_accuracy(predictions, batch.Emotion)
 
@@ -162,11 +191,29 @@ if __name__ == '__main__':
     pre = Preprocess('train.csv', 'dev.csv')
     pre.run()
 
-    hidden_dim = 256
-    output_dim = 1
-    model = RNN(pre.input_dim, pre.embedding_dim, hidden_dim, output_dim)
+    HIDDEN_DIM = 256
+    OUTPUT_DIM = 1
+    N_LAYERS = 2
+    BIDIRECTIONAL = True
+    DROPOUT = 0.5
+    PAD_IDX = pre.text.vocab.stoi[pre.text.pad_token]
+    model = RNN(pre.input_dim,
+                pre.embedding_dim,
+                HIDDEN_DIM,
+                OUTPUT_DIM,
+                N_LAYERS,
+                BIDIRECTIONAL,
+                DROPOUT,
+                PAD_IDX)
 
-    optimizer = optim.SGD(model.parameters(), lr=1e-3)
+    pretrained_embeddings = pre.text.vocab.vectors
+    model.embedding.weight.data.copy_(pretrained_embeddings)
+    UNK_IDX = pre.text.vocab.stoi[pre.text.unk_token]
+
+    model.embedding.weight.data[UNK_IDX] = torch.zeros(pre.embedding_dim)
+    model.embedding.weight.data[PAD_IDX] = torch.zeros(pre.embedding_dim)
+
+    optimizer = optim.Adam(model.parameters())
     criterion = nn.BCEWithLogitsLoss()
 
     N_EPOCHS = 20
