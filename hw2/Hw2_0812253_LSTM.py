@@ -5,11 +5,13 @@ from sklearn.model_selection import train_test_split
 import torch.nn as nn
 import torch.optim as optim
 import time
+import spacy
 
 
 P_TRAIN_CSV = 'p_train.csv'
 P_VALID_CSV = 'p_val.csv'
 P_TEST_CSV = 'p_test.csv'
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 class Preprocess:
@@ -79,14 +81,13 @@ class Preprocess:
         # this will return the iterator for each dataset
         # in each dataset, it is sorted by the length of text
         # the device argument is used to specify using the CPU
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         self.train_iter, self.val_iter, self.test_iter = BucketIterator.splits(
             (train, val, test),
             batch_size=64,
             sort_within_batch=True,
             sort_key=lambda x: len(x.Utterance),
-            device=device)
+            device=DEVICE)
 
     def run(self):
         self.select_and_save()
@@ -143,7 +144,6 @@ def categorical_accuracy(preds, y):
     return acc
 
 
-
 def train(model, iterator, optimizer, criterion):
     epoch_loss = 0
     epoch_acc = 0
@@ -187,6 +187,23 @@ def epoch_time(start_time, end_time):
     return elapsed_mins, elapsed_secs
 
 
+nlp = spacy.load('en_core_web_sm')
+
+
+def predict_class(text, model, sentence, min_len=4):
+    model.eval()
+    tokenized = [tok.text for tok in nlp.tokenizer(sentence)]
+    if len(tokenized) < min_len:
+        tokenized += [''] * (min_len - len(tokenized))
+    indexed = [text.vocab.stoi[t] for t in tokenized]
+    tensor = torch.LongTensor(indexed).to(DEVICE)
+    tensor = tensor.unsqueeze(1)
+    length_tensor = torch.LongTensor([len(indexed)])
+    preds = model(tensor, length_tensor)
+    max_preds = preds.argmax(dim=1)
+    return max_preds.item()
+
+
 if __name__ == '__main__':
     pre = Preprocess('train.csv', 'dev.csv')
     pre.run()
@@ -216,7 +233,7 @@ if __name__ == '__main__':
     optimizer = optim.Adam(model.parameters())
     criterion = nn.CrossEntropyLoss()
 
-    N_EPOCHS = 20
+    N_EPOCHS = 10
     best_valid_loss = float('inf')
 
     for epoch in range(N_EPOCHS):
@@ -232,13 +249,22 @@ if __name__ == '__main__':
 
         if valid_loss < best_valid_loss:
             best_valid_loss = valid_loss
-            torch.save(model.state_dict(), 'tut1-model.pt')
+            torch.save(model.state_dict(), 'model.pt')
 
         print(f'Epoch: {epoch+1:02} | Epoch Time: {epoch_mins}m {epoch_secs}s')
         print(f'\tTrain Loss: {train_loss:.3f} | Train Acc: {train_acc*100:.2f}%')
         print(f'\t Val. Loss: {valid_loss:.3f} |  Val. Acc: {valid_acc*100:.2f}%')
 
-    model.load_state_dict(torch.load('tut1-model.pt'))
+    model.load_state_dict(torch.load('model.pt'))
     test_loss, test_acc = evaluate(model, pre.test_iter, criterion)
 
     print(f'Test Loss: {test_loss:.3f} | Test Acc: {test_acc*100:.2f}%')
+
+    pred = []
+    df = pd.read_csv('test.csv')
+
+    for index, row in df.iterrows():
+        pred.append(predict_class(pre.text, model, row['Utterance']))
+
+    output_df = pd.DataFrame({'index': [i for i in range(len(pred))], 'emotion': pred})
+    output_df.to_csv('output.csv', index=False)
