@@ -21,6 +21,7 @@ class Preprocess:
         self.val_iter = None
         self.train_iter = None
         self.input_dim = None
+        self.output_dim = None
         self.embedding_dim = None
         self.text = None
         self.label = None
@@ -44,7 +45,7 @@ class Preprocess:
             tokenizer_language='en_core_web_sm',
             include_lengths=True
         )
-        self.label = LabelField(dtype=torch.float)
+        self.label = LabelField()
 
         # fields is recognized by order of csv column index, here is first two column
         train, val, test = TabularDataset.splits(
@@ -63,7 +64,6 @@ class Preprocess:
         # 6 billion words with 100 dimensions per word
         self.text.build_vocab(
             train,
-            max_size=25_000,
             vectors="glove.6B.100d",
             unk_init=torch.Tensor.normal_
         )
@@ -73,6 +73,8 @@ class Preprocess:
         print(self.text.vocab.vectors.shape)
         print(f"Unique tokens in TEXT vocabulary: {len(self.text.vocab)}")
         print(f"Unique tokens in LABEL vocabulary: {len(self.label.vocab)}")
+        print(self.label.vocab.stoi)
+        self.output_dim = len(self.label.vocab)
 
         # this will return the iterator for each dataset
         # in each dataset, it is sorted by the length of text
@@ -81,8 +83,8 @@ class Preprocess:
 
         self.train_iter, self.val_iter, self.test_iter = BucketIterator.splits(
             (train, val, test),
-            batch_size=16,
-            sort_within_batch=False,
+            batch_size=64,
+            sort_within_batch=True,
             sort_key=lambda x: len(x.Utterance),
             device=device)
 
@@ -95,7 +97,7 @@ class RNN(nn.Module):
     def __init__(self, vocab_size, embedding_dim, hidden_dim, output_dim, n_layers,
                  bidirectional, dropout, pad_idx):
         super().__init__()
-        self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx = pad_idx)
+        self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=pad_idx)
         self.rnn = nn.LSTM(embedding_dim,
                            hidden_dim,
                            num_layers=n_layers,
@@ -124,24 +126,22 @@ class RNN(nn.Module):
 
         # concat the final forward (hidden[-2,:,:]) and backward (hidden[-1,:,:]) hidden layers
         # and apply dropout
-        hidden = self.dropout(torch.cat((hidden[-2,:,:], hidden[-1,:,:]), dim = 1))
+        hidden = self.dropout(torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1))
 
         # hidden = [batch size, hid dim * num directions]
 
         return self.fc(hidden)
 
 
-def binary_accuracy(preds, y):
+def categorical_accuracy(preds, y):
     """
     Returns accuracy per batch, i.e. if you get 8/10 right, this returns 0.8, NOT 8
     """
-
-    # round predictions to the closest integer
-    rounded_preds = torch.round(torch.sigmoid(preds))
-    # convert into float for division
-    correct = (rounded_preds == y).float()
-    acc = correct.sum() / len(correct)
+    top_pred = preds.argmax(1, keepdim=True)
+    correct = top_pred.eq(y.view_as(top_pred)).sum()
+    acc = correct.float() / y.shape[0]
     return acc
+
 
 
 def train(model, iterator, optimizer, criterion):
@@ -154,7 +154,7 @@ def train(model, iterator, optimizer, criterion):
         text, text_lengths = batch.Utterance
         predictions = model(text, text_lengths).squeeze(1)
         loss = criterion(predictions, batch.Emotion)
-        acc = binary_accuracy(predictions, batch.Emotion)
+        acc = categorical_accuracy(predictions, batch.Emotion)
         loss.backward()
         optimizer.step()
         epoch_loss += loss.item()
@@ -170,10 +170,10 @@ def evaluate(model, iterator, criterion):
 
     with torch.no_grad():
         for batch in iterator:
-            predictions = model(batch.Utterance).squeeze(1)
+            text, text_lengths = batch.Utterance
+            predictions = model(text, text_lengths).squeeze(1)
             loss = criterion(predictions, batch.Emotion)
-            acc = binary_accuracy(predictions, batch.Emotion)
-
+            acc = categorical_accuracy(predictions, batch.Emotion)
             epoch_loss += loss.item()
             epoch_acc += acc.item()
 
@@ -192,7 +192,7 @@ if __name__ == '__main__':
     pre.run()
 
     HIDDEN_DIM = 256
-    OUTPUT_DIM = 1
+    OUTPUT_DIM = pre.output_dim
     N_LAYERS = 2
     BIDIRECTIONAL = True
     DROPOUT = 0.5
@@ -214,7 +214,7 @@ if __name__ == '__main__':
     model.embedding.weight.data[PAD_IDX] = torch.zeros(pre.embedding_dim)
 
     optimizer = optim.Adam(model.parameters())
-    criterion = nn.BCEWithLogitsLoss()
+    criterion = nn.CrossEntropyLoss()
 
     N_EPOCHS = 20
     best_valid_loss = float('inf')
@@ -242,5 +242,3 @@ if __name__ == '__main__':
     test_loss, test_acc = evaluate(model, pre.test_iter, criterion)
 
     print(f'Test Loss: {test_loss:.3f} | Test Acc: {test_acc*100:.2f}%')
-
-
