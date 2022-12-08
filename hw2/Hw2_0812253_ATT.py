@@ -5,6 +5,7 @@ from sklearn.model_selection import train_test_split
 import torch.nn as nn
 import torch.optim as optim
 import spacy
+import torch.nn.functional as F
 
 
 P_TRAIN_CSV = 'p_train.csv'
@@ -44,11 +45,11 @@ class Preprocess:
 
     def word_embedding(self):
         self.text = Field(
-            tokenize='spacy',
-            lower=True,
+            sequential=True,
+            use_vocab=True,
             tokenizer_language='en_core_web_sm',
-            include_lengths=True
-        )
+            tokenize='spacy',
+            lower=True, batch_first=True)
         self.label = LabelField()
 
         # fields is recognized by order of csv column index, here is first two column
@@ -83,8 +84,8 @@ class Preprocess:
         self.train_iter, self.val_iter, self.test_iter = BucketIterator.splits(
             (train, val, test),
             batch_size=64,
-            sort_within_batch=True,
             sort_key=lambda x: len(x.Utterance),
+            shuffle=True,
             device=DEVICE)
 
     def run(self):
@@ -93,26 +94,32 @@ class Preprocess:
 
 
 class BidirectionalRNN(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, hidden_dim, output_dim, n_layers, dropout, pad_idx):
+    def __init__(self, vocab_size, embedding_dim, hidden_dim, output_dim, n_layers, dropout):
         super().__init__()
-        self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=pad_idx)
+        self.embedding = nn.Embedding(vocab_size, embedding_dim)
         self.rnn = nn.LSTM(embedding_dim,
-                           hidden_dim,
+                           hidden_dim // 2,
                            num_layers=n_layers,
                            bidirectional=True,
                            dropout=dropout)
-        self.fc = nn.Linear(hidden_dim * 2, output_dim)
+        self.fc = nn.Linear(hidden_dim, output_dim)
+        self.output_dim = output_dim
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, text, text_lengths):
-        embedded = self.dropout(self.embedding(text))
-        packed_embedded = nn.utils.rnn.pack_padded_sequence(embedded, text_lengths.to('cpu'))
-        packed_output, (hidden, cell) = self.rnn(packed_embedded)
+    def attention(self, lstm_output, final_state):
+        lstm_output = lstm_output.permute(1, 0, 2)
+        merged_state = torch.cat([s for s in final_state], 1)
+        merged_state = merged_state.squeeze(0).unsqueeze(2)
+        weights = torch.bmm(lstm_output, merged_state)
+        weights = F.softmax(weights.squeeze(2), dim=1).unsqueeze(2)
+        return torch.bmm(torch.transpose(lstm_output, 1, 2), weights).squeeze(2)
 
-        # concat the final forward (hidden[-2,:,:]) and backward (hidden[-1,:,:]) hidden layers
-        # and apply dropout
-        hidden = self.dropout(torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1))
-        return self.fc(hidden)
+    def forward(self, x):
+        embedded = self.embedding(x)
+        output, (hidden, cell) = self.rnn(embedded)
+
+        attn_output = self.attention(output, hidden)
+        return self.fc(attn_output.squeeze(0))
 
 
 def accuracy(preds, y):
@@ -129,8 +136,8 @@ def train(model, iterator, optimizer, criterion):
 
     for batch in iterator:
         optimizer.zero_grad()
-        text, text_lengths = batch.Utterance
-        predictions = model(text, text_lengths).squeeze(1)
+        batch.Utterance = batch.Utterance.permute(1, 0)
+        predictions = model(batch.Utterance).squeeze(1)
         loss = criterion(predictions, batch.Emotion)
         acc = accuracy(predictions, batch.Emotion)
         loss.backward()
@@ -148,8 +155,8 @@ def evaluate(model, iterator, criterion):
 
     with torch.no_grad():
         for batch in iterator:
-            text, text_lengths = batch.Utterance
-            predictions = model(text, text_lengths).squeeze(1)
+            batch.Utterance = batch.Utterance.permute(1, 0)
+            predictions = model(batch.Utterance).squeeze(1)
             loss = criterion(predictions, batch.Emotion)
             acc = accuracy(predictions, batch.Emotion)
             epoch_loss += loss.item()
@@ -158,20 +165,16 @@ def evaluate(model, iterator, criterion):
     return epoch_loss / len(iterator), epoch_acc / len(iterator)
 
 
-def predict_class(text, model, sentence, min_len=4):
+def predict_class(text, model, sentence):
     model.eval()
     tokenized = [tok.text for tok in NLP.tokenizer(sentence)]
-    if len(tokenized) < min_len:
-        tokenized += [''] * (min_len - len(tokenized))
     indexed = [text.vocab.stoi[t] for t in tokenized]
     tensor = torch.LongTensor(indexed).to(DEVICE)
     tensor = tensor.unsqueeze(1)
-    length_tensor = torch.LongTensor([len(indexed)])
-    preds = model(tensor, length_tensor)
-    print(preds)
+    tensor = torch.cat(2*[tensor], dim=1)
+    preds = model(tensor)
     max_preds = preds.argmax(dim=1)
-    print(max_preds)
-    return max_preds.item()
+    return max_preds[0].item()
 
 
 if __name__ == '__main__':
@@ -179,7 +182,7 @@ if __name__ == '__main__':
     pre.run()
 
     padding_index = pre.text.vocab.stoi[pre.text.pad_token]
-    model = BidirectionalRNN(pre.input_dim, pre.embedding_dim, 256, pre.output_dim, 2, 0.5, padding_index)
+    model = BidirectionalRNN(pre.input_dim, pre.embedding_dim, 256, pre.output_dim, 1, 0.5)
 
     model.embedding.weight.data.copy_(pre.text.vocab.vectors)
     unk_idx = pre.text.vocab.stoi[pre.text.unk_token]
@@ -190,7 +193,7 @@ if __name__ == '__main__':
     criterion = nn.CrossEntropyLoss()
 
     # start training
-    epoch = 30
+    epoch = 15
     best_valid_loss = float('inf')
     for epoch in range(epoch):
         train_loss, train_acc = train(model, pre.train_iter, optimizer, criterion)
@@ -216,7 +219,8 @@ if __name__ == '__main__':
     for index, row in df.iterrows():
         pred.append(predict_class(pre.text, model, row['Utterance']))
 
+    inv_map = {v: k for k, v in pre.label_dict.items()}
     # pack as required format
     output_df = pd.DataFrame({'index': [i for i in range(len(pred))], 'emotion': pred})
-    output_df['emotion'] = output_df['emotion'].map(pre.label_dict).map(FORMAL_INDEX_MAP)
+    output_df['emotion'] = output_df['emotion'].map(inv_map).map(FORMAL_INDEX_MAP)
     output_df.to_csv('output.csv', index=False)
