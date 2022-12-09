@@ -16,6 +16,21 @@ NLP = spacy.load('en_core_web_sm')
 FORMAL_INDEX_MAP = {'neutral': 0, 'anger': 1, 'joy': 2, 'surprise': 3, 'sadness': 4, 'disgust': 5, 'fear': 6}
 
 
+def oversample(df):
+    classes = df['Emotion'].value_counts().to_dict()
+    most = max(classes.values())
+    classes_list = []
+    for key in classes:
+        classes_list.append(df[df['Emotion'] == key])
+    classes_sample = []
+    for i in range(1, len(classes_list)):
+        classes_sample.append(classes_list[i].sample(most, replace=True))
+    df_maybe = pd.concat(classes_sample)
+    final_df = pd.concat([df_maybe, classes_list[0]], axis=0)
+    final_df = final_df.reset_index(drop=True)
+    return final_df
+
+
 class Preprocess:
     def __init__(self, train_path, test_path):
         self.train_df = pd.read_csv(train_path)
@@ -36,6 +51,12 @@ class Preprocess:
         self.test_df = self.test_df[['Utterance', 'Emotion']]
         # separate training set to training set and validation set
         self.train_df, self.val_df = train_test_split(self.train_df, test_size=0.1)
+        print('Before oversampling:')
+        print(self.train_df['Emotion'].value_counts())
+        self.train_df = oversample(self.train_df)
+        self.val_df = oversample(self.val_df)
+        print('After oversampling:')
+        print(self.train_df['Emotion'].value_counts())
         self.train_df.to_csv(P_TRAIN_CSV, header=False, index=False)
         self.test_df.to_csv(P_TEST_CSV, header=False, index=False)
         self.val_df.to_csv(P_VALID_CSV, header=False, index=False)
