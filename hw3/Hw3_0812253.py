@@ -108,7 +108,7 @@ if __name__ == '__main__':
     test_data = format_dataset(COLAB_FILE_PREFIX + 'test_HW3dataset.json')
 
     MAX_LEN = 450
-    tokenizer =  BertTokenizer.from_pretrained('hfl/chinese-roberta-wwm-ext-large', do_lower_case=True)
+    tokenizer = BertTokenizer.from_pretrained('hfl/chinese-roberta-wwm-ext-large', do_lower_case=True)
 
     dev_input_ids, dev_attention_mask = preprocessor(dataset=dev_data, tokenizer=tokenizer)
     dev_input_ids = np.asarray(dev_input_ids, dtype='int32')
@@ -157,11 +157,12 @@ if __name__ == '__main__':
     model.fit(viola, epochs=4)
     model.save_pretrained(COLAB_FILE_PREFIX + 'model/roberta_model')
 
-    test_dict = {'input_ids':test_input_ids,
-                 'attention_mask':test_attention_mask}
-    y_pred = model.predict(test_dict)
+    # start predict result for submission
+    test_dict = {'input_ids': test_input_ids,
+                 'attention_mask': test_attention_mask}
+    pred = model.predict(test_dict)
     ans = []
-    for log in y_pred[0]:
+    for log in pred[0]:
         ans.append(np.argmax(log) + 1)
-    df = pd.DataFrame({'index':[i for i in range(len(ans))], 'answer':ans})
-    df.to_csv(COLAB_FILE_PREFIX+'submission0103_7.csv', index=False)
+    df = pd.DataFrame({'index': [i for i in range(len(ans))], 'answer': ans})
+    df.to_csv(COLAB_FILE_PREFIX+'submission.csv', index=False)
