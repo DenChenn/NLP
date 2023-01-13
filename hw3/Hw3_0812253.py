@@ -51,19 +51,6 @@ def format_dataset(json_path):
 
 
 def preprocessor(dataset, tokenizer):
-    """
-    This function will convert a given article, question, choices in a format:
-
-    <s> article </s> question </s> choices[0] </s>
-    <s> article </s> question </s> choices[1] </s>
-    <s> article </s> question </s> choices[2] </s>
-    <s> article </s> question </s> choices[3] </s>
-
-    After converting in this format the data will be tokenized using a given tokenizer.
-    This function will return 4 arrays namely, input_ids, attention_mask, token_type_ids and labels.
-
-    individual input_ids, token_type_ids, attention_mask shape will be as: [num_choices, max_seq_length]
-    """
     all_input_ids = []
     all_attention_mask = []
 
