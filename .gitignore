@@ -1,3 +1,6 @@
 .idea
 .DS_Store
 .vector_cache
+*.json
+articles
+polished_articles
